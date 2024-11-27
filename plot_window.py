@@ -33,7 +33,7 @@ class PlotWindow:
             self.bandwidth_data["sent"].append(data["sent_bandwidth"])
             self.bandwidth_data["recv"].append(data["recv_bandwidth"])
             self.jitter_data.append(data["jitter"])
-            print(f"TCP Packets: {data['tcp_packets']}, UDP Packets: {data['udp_packets']}, ICMP Packets: {data['icmp_packets']}")
+            #print(f"TCP Packets: {data['tcp_packets']}, UDP Packets: {data['udp_packets']}, ICMP Packets: {data['icmp_packets']}")
             self.packet_data["TCP"].append(data["tcp_packets"])
             self.packet_data["UDP"].append(data["udp_packets"])
             self.packet_data["ICMP"].append(data["icmp_packets"])
@@ -85,7 +85,8 @@ class PlotWindow:
             self.fig.savefig("plot.png")
 
         except Empty:
-            print("Queue is empty, no data to plot.")
+            #print("Queue is empty, no data to plot.")
+            return
 
     def render(self):
         clock = pygame.time.Clock()

@@ -1,22 +1,17 @@
-"""
-MPEG-DASH SRD based 360 VR Tiled Streaming System for Foveated Rendering
-author: Hyun Wook Kim;Jin Wook Yang;Jae Young Yang;Jun Hwan Jang;Woo Chool Park
-Year: 2018 | Conference Paper | Publisher: IEEE
-"""
-
 import cv2
 import os
-import datetime
+import subprocess
 import traceback
+import datetime
 import xml.etree.ElementTree as ET
 
-# フレームバッファとセグメントインデックスをグローバル変数として定義
 frame_buffer = []
 segment_index = 0
 
-def frame_segmented(combined_frame, fps, segment_dir="segmented_video", segment_duration=2):
+
+def frame_segmented(combined_frame, fps, segment_dir="segments/segmented_video", segment_duration=2):
     """
-    合成フレームをセグメント化し、MPEG-DASH 用のセグメントとして保存する関数。
+    合成フレームをセグメント化し、90度時計回りに回転して左右反転し、H.264/AAC形式でエンコードして保存します。
 
     Args:
         combined_frame (np.ndarray): 合成されたフレーム。
@@ -26,103 +21,95 @@ def frame_segmented(combined_frame, fps, segment_dir="segmented_video", segment_
     """
     global frame_buffer, segment_index
 
-    '''
-    # セグメントディレクトリの作成
-    if not os.path.exists(segment_dir):
-        os.makedirs(segment_dir)
-        print(f"ディレクトリを作成しました: {segment_dir}")
-    else:
-        print(f"ディレクトリが既に存在しています： {segment_dir}")
-    '''
-    
-    # 2秒分のフレーム数を計算
+    # セグメントディレクトリを絶対パスに変換
+    segment_dir = os.path.abspath(segment_dir)
+    os.makedirs(segment_dir, exist_ok=True)  # ディレクトリを作成
+
+    # 回転と反転の処理
+    processed_frame = cv2.rotate(combined_frame, cv2.ROTATE_90_CLOCKWISE)  # 90度時計回り
+    processed_frame = cv2.flip(processed_frame, 1)  # 左右反転
+
     frames_per_segment = fps * segment_duration
-    #print(f"{frames_per_segment}")
+    frame_buffer.append(processed_frame)
 
-    # フレームをバッファに追加
-    frame_buffer.append(combined_frame)
-    #print(f"{len(frame_buffer)}")
-    #print(f"フレームバッファの長さ: {len(frame_buffer)}/{frames_per_segment}")
-
-    # バッファが2秒分に達した場合、セグメントを保存
+    # フレームが規定数に達したらセグメントを保存
     if len(frame_buffer) >= frames_per_segment:
-        segment_path = os.path.join(segment_dir, f"segment_{segment_index:04d}.mp4")
-        print(f"セグメントを保存中: {segment_path}")
-        height, width, _ = combined_frame.shape
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        raw_segment_path = os.path.join(segment_dir, f"segment_{segment_index:04d}_raw.mp4")
+        encoded_segment_path = os.path.join(segment_dir, f"segment_{segment_index:04d}.mp4")
 
+        # OpenCVを使って未エンコードの動画を保存
         try:
-            out = cv2.VideoWriter(segment_path, fourcc, fps, (width, height))
-
-            if not out.isOpened():
-                print(f"VideoWriter の初期化に失敗しました: {segment_path}")
-                return False
-
+            height, width, _ = frame_buffer[0].shape
+            out = cv2.VideoWriter(raw_segment_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
             for frame in frame_buffer:
                 out.write(frame)
-
             out.release()
-            print(f"セグメント {segment_index} を保存しました: {segment_path}")
-            generate_mpd(segment_dir=segment_dir)  # MPD ファイルの即時更新
 
+            print(f"未エンコードセグメントを保存しました: {raw_segment_path}")
+
+            # ファイルの存在確認
+            if not os.path.exists(raw_segment_path):
+                raise FileNotFoundError(f"未エンコードファイルが見つかりません: {raw_segment_path}")
         except Exception as e:
-            error_message = traceback.format_exc()
-            print(f"セグメント {segment_index} の保存に失敗しました: {segment_path}")
-            print(f"エラーの詳細: {error_message}")
+            print(f"セグメント保存エラー: {raw_segment_path}")
+            print(traceback.format_exc())
+            frame_buffer.clear()
+            return False
 
+        # ffmpegを使ってH.264/AAC形式にエンコード
+        try:
+            # ffmpegでH.264/AACに変換 + 90度回転
+            command = [
+                "ffmpeg",
+                "-i", raw_segment_path,
+                "-vf", "transpose=1",  # 90度時計回りに回転
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-c:a", "aac",
+                "-strict", "experimental",
+                encoded_segment_path,
+                "-y"
+            ]
+
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            # ffmpegのエラーチェック
+            if result.returncode != 0:
+                print(f"ffmpegエラー: {result.stderr}")
+                raise subprocess.CalledProcessError(result.returncode, command)
+
+            print(f"エンコード済みセグメントを保存しました: {encoded_segment_path}")
+        except Exception as e:
+            print(f"エンコード中にエラーが発生しました: {encoded_segment_path}")
+            print(traceback.format_exc())
+        finally:
+            # 一時的な未エンコードファイルを削除
+            if os.path.exists(raw_segment_path):
+                os.remove(raw_segment_path)
+
+        # フレームバッファをクリアし、次のセグメントの準備
         frame_buffer.clear()
         segment_index += 1
         return True
-    
-        '''
-        out = cv2.VideoWriter(segment_path, fourcc, fps, (width, height))
 
-        # バッファ内のフレームを動画ファイルに書き込み
-        for frame in frame_buffer:
-            out.write(frame)
-        # セグメントの書き込み後にフラッシュを追加
-        out.flush()  # 書き込みのフラッシュ
-        out.release()
-        print(f"セグメント {segment_index} を保存しました: {segment_path}")
-        
-        # バッファのクリアとインデックスの更新
-        frame_buffer.clear()
-        segment_index += 1
-        return True  # セグメントの書き込み完了を通知
-        '''
     return False
+def generate_mpd(segment_dir="segments/segmented_video", mpd_path="segments/manifest.mpd", fps=30, resolution="960x540", bitrate="1500k", total_duration=24):
+    segment_dir = os.path.abspath(segment_dir)
+    mpd_path = os.path.abspath(mpd_path)
+    os.makedirs(os.path.dirname(mpd_path), exist_ok=True)
 
+    # 動画全体の長さを計算 (Snow.mp4: 24秒)
+    total_duration_frames = total_duration * fps
 
-def generate_mpd(segment_dir="segments", mpd_path="manifest.mpd", fps=30, resolution="960x540", bitrate="1500k"):
-    """
-    MPEG-DASH の MPD ファイルを生成する関数。
-
-    Args:
-        segment_dir (str): セグメントファイルが保存されているディレクトリ。
-        mpd_path (str): 出力する MPD ファイルのパス。
-        fps (int): 動画のフレームレート。
-        resolution (str): 動画の解像度（例: "960x540"）。
-        bitrate (str): ビットレート（例: "1500k"）。
-    """
-    import xml.etree.ElementTree as ET
-    from datetime import datetime
-
-    # MPD ファイルのルート要素
     mpd = ET.Element("MPD", attrib={
         "xmlns": "urn:mpeg:dash:schema:mpd:2011",
         "profiles": "urn:mpeg:dash:profile:isoff-on-demand:2011",
         "type": "dynamic",
         "minBufferTime": "PT1.5S",
-        "minimumUpdatePeriod": "PT2S",
-        "availabilityStartTime": datetime.utcnow().isoformat() + "Z"
+        "availabilityStartTime": datetime.datetime.utcnow().isoformat() + "Z"
     })
 
-    # Period 要素の追加
-    #period = ET.SubElement(mpd, "Period", attrib={"duration": "PT2M"})
-    #period = ET.SubElement(mpd, "Period")
     period = ET.SubElement(mpd, "Period", attrib={"id": "1"})
-
-    # AdaptationSet 要素の追加
     adaptation_set = ET.SubElement(period, "AdaptationSet", attrib={
         "mimeType": "video/mp4",
         "codecs": "avc1.42E01E",
@@ -132,7 +119,6 @@ def generate_mpd(segment_dir="segments", mpd_path="manifest.mpd", fps=30, resolu
         "bandwidth": bitrate
     })
 
-    # Representation 要素の追加
     representation = ET.SubElement(adaptation_set, "Representation", attrib={
         "id": "1",
         "bandwidth": bitrate,
@@ -140,15 +126,15 @@ def generate_mpd(segment_dir="segments", mpd_path="manifest.mpd", fps=30, resolu
         "height": resolution.split("x")[1],
         "frameRate": str(fps)
     })
-    
+
     segment_list = ET.SubElement(representation, "SegmentList", attrib={
         "timescale": str(fps),
-        "duration": str(fps * 2)
+        "duration": str(total_duration_frames)
     })
 
-    segment_files = sorted([f for f in os.listdir(segment_dir) if f.endswith(".mp4")])
+    segment_files = sorted([f for f in os.listdir(segment_dir) if f.endswith(".mp4") and not f.endswith("_raw.mp4")])
     for segment_file in segment_files:
-        ET.SubElement(segment_list, "SegmentURL", attrib={"media": segment_file})
+        ET.SubElement(segment_list, "SegmentURL", attrib={"media": f"segmented_video/{segment_file}"})
 
     tree = ET.ElementTree(mpd)
     tree.write(mpd_path, xml_declaration=True, encoding="utf-8")

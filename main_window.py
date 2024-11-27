@@ -29,37 +29,27 @@ class MainWindow:
 
         self.cursor_image = pygame.image.load("Assets/Red+.png")
         self.cursor_rect = self.cursor_image.get_rect()
-        pygame.mouse.set_visible(False)  # システムカーソルを非表示にする
+        pygame.mouse.set_visible(False)
 
         # MPEG-DASH 用の初期設定
-        self.segment_dir = "segments"
+        self.segment_dir = os.path.abspath("segments/segmented_video")  # 絶対パスを設定
+        os.makedirs(self.segment_dir, exist_ok=True)
+        print(f"セグメントディレクトリ: {self.segment_dir}")
+
         self.fps = 30
         self.frame_counter = 0
-        '''
-        # セグメントディレクトリの作成
-        segment_dir="segmented_video"
-        if not os.path.exists(segment_dir):
-            os.makedirs(segment_dir)
-            print(f"ディレクトリを作成しました: {segment_dir}")
-        else:
-            print(f"ディレクトリが既に存在しています： {segment_dir}")
-        '''
 
         # サーバとブラウザを別スレッドで起動
         self.start_web_server()
         self.start_browser()
 
     def start_web_server(self):
-        server_thread = threading.Thread(target=setup_web_server, args=(self.segment_dir,), daemon=True)
+        server_thread = threading.Thread(target=setup_web_server, args=("segments",), daemon=True)
         server_thread.start()
 
     def start_browser(self):
         browser_thread = threading.Thread(target=open_chrome, args=("http://localhost:8080/player.html",), daemon=True)
         browser_thread.start()
-
-    def run(self):
-        clock = pygame.time.Clock()
-        running = True
 
     def run(self):
         clock = pygame.time.Clock()
@@ -77,60 +67,27 @@ class MainWindow:
             frame_med = cv2.resize(frame_med, (self.window_height, self.window_width))
             frame_high = cv2.resize(frame_high, (self.window_height, self.window_width))
 
-            # フレームの180度回転（上下左右の反転に対応）
-            frame_low = cv2.rotate(frame_low, cv2.ROTATE_180)
-            frame_med = cv2.rotate(frame_med, cv2.ROTATE_180)
-            frame_high = cv2.rotate(frame_high, cv2.ROTATE_180)
+            # フレームの回転と反転処理
+            frame_low = cv2.rotate(frame_low, cv2.ROTATE_90_CLOCKWISE)
+            frame_med = cv2.rotate(frame_med, cv2.ROTATE_90_CLOCKWISE)
+            frame_high = cv2.rotate(frame_high, cv2.ROTATE_90_CLOCKWISE)
 
-            # OpenCVからPygameに変換する前に、フレームを左右反転
-            frame_low = np.ascontiguousarray(np.fliplr(frame_low))
-            frame_med = np.ascontiguousarray(np.fliplr(frame_med))
-            frame_high = np.ascontiguousarray(np.fliplr(frame_high))
+            frame_low = cv2.flip(frame_low, 1)
+            frame_med = cv2.flip(frame_med, 1)
+            frame_high = cv2.flip(frame_high, 1)
 
-            # OpenCV から Pygame Surface に変換
-            frame_low = cv2.cvtColor(frame_low, cv2.COLOR_BGR2RGB)
-            frame_med = cv2.cvtColor(frame_med, cv2.COLOR_BGR2RGB)
-            frame_high = cv2.cvtColor(frame_high, cv2.COLOR_BGR2RGB)
+            # 合成フレーム作成
+            combined_frame = merge_frame(frame_low, frame_med, frame_high, 0, 0)
 
-            surface_low = pygame.surfarray.make_surface(frame_low)
-            surface_med = pygame.surfarray.make_surface(frame_med)
-            surface_high = pygame.surfarray.make_surface(frame_high)
-
-            cursor_x, cursor_y = pygame.mouse.get_pos()
-
-            try:
-                #print(f'Frame merging done')
-                combined_frame = merge_frame(frame_low, frame_med, frame_high, cursor_y, cursor_x)  
-                #combined_frame = cv2.cvtColor(combined_frame, cv2.COLOR_BGR2RGB)                    # 合成後のフレームの色空間変換/不要
-            except Exception as e:
-                print(f"Error during frame merging: {e}\n")
-                break
-
-            #Main Windowに動画を出力
-            #combined_frame = cv2.cvtColor(combined_frame, cv2.COLOR_BGR2RGB)        #動画が青白くなるのを防ぐ/不要
-            surface = pygame.surfarray.make_surface(combined_frame)
-            self.screen.blit(surface, (0, 0))
-            self.cursor_rect.center = (cursor_x, cursor_y)
-            self.screen.blit(self.cursor_image, self.cursor_rect)
-            pygame.display.flip()
-
-            # フレームセグメントの生成
-            self.frame_counter += 1
-            frame_segmented(combined_frame, self.fps)
-
-            # 2秒ごとに MPD ファイルを生成
-            # 2秒ごとに MPD ファイルを更新し、プレイヤーに再読み込みを促す
+            # フレームをセグメント化
+            frame_segmented(combined_frame, self.fps, self.segment_dir)
             if self.frame_counter >= self.fps * 2:
-                generate_mpd(segment_dir=self.segment_dir)
-                # プレイヤーの再読み込みを促すリクエスト
-                os.system("curl http://localhost:8080/manifest.mpd -s > nul")
-            self.frame_counter = 0
+                generate_mpd(segment_dir=self.segment_dir, mpd_path=os.path.join("segments", "manifest.mpd"))
+                self.frame_counter = 0
 
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-
+            self.frame_counter += 1
             clock.tick(60)
+
 
         self.low_cap.release()
         self.med_cap.release()

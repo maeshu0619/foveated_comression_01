@@ -1,5 +1,6 @@
 import pygame
 import multiprocessing
+import os
 from experiment import debug_timer
 from h264_compression import h264_compression
 from main_window import MainWindow
@@ -14,17 +15,6 @@ def start_monitor_window(monitor_queue):
 def start_plot_window(monitor_queue):
     plot = PlotWindow(monitor_queue)
     plot.render()
-
-"""
-@debug_timer
-def main():
-    # デバッグ対象の処理
-    total = 0
-    for i in range(1000000):
-        total += i
-    print(f"合計値: {total}")
-"""    
-
 
 if __name__ == "__main__":
     pygame.init()
@@ -50,6 +40,14 @@ if __name__ == "__main__":
     plot_process = multiprocessing.Process(target=start_plot_window, args=(monitor_queue,))
     plot_process.start()
 
+    
+    # セグメントディレクトリの作成
+    segment_dir="segments/segmented_video"
+    if not os.path.exists(segment_dir):
+        os.makedirs(segment_dir)
+        print(f"ディレクトリを作成しました: {segment_dir}")
+    else:
+        print(f"ディレクトリが既に存在しています： {segment_dir}")
     # MainWindow の初期化と実行
     try:
         main_window_instance = MainWindow(low_res_path, med_res_path, high_res_path)
